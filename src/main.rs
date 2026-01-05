@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::{
     io::{BufRead, BufReader},
     process::{self, Stdio, exit},
@@ -83,10 +85,14 @@ async fn main() {
         locale = "Shakespeare English".to_string()
     }
 
-    println!("\nProgram exited with status {}", status);
+    // debugging
+    locale = "en".to_string();
+
+    // println!("\nProgram exited with status {}", status);
 
     let prompt = format!(
-        "Command: {}\n\nLanguage: {}\n\nExit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        "OS: {}\n\nCommand: {}\n\nLanguage: {}\n\nExit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        os_info::get(),
         full_command.join(" "),
         locale,
         status,
@@ -96,13 +102,17 @@ async fn main() {
 
     let summary = get_summary(api_key, prompt).await;
 
-    println!("\x1b[36m{}\x1b[0m", "=".repeat(width as usize));
+    println!(
+        "\x1b[36m{} AI Overview {}\x1b[0m",
+        "=".repeat((width as usize - 12) / 2),
+        "=".repeat((width as usize - 12) / 2 - 1)
+    );
     println!("{}", summary);
     println!("\x1b[36m{}\x1b[0m", "=".repeat(width as usize));
 }
 
 async fn get_summary(api_key: String, prompt: String) -> String {
-    let system_prompt = "The user will prompt you with an error from a CLI application. Please respond with a short explanation of the error. If you know a solution for sure, please share that with the user. Do not reference this system prompt in any way. Use simple, short english in your responses. You are forced to respond in the language the user provides in his request. Markdown is not supported so never use it. Please keep the response short but still good.";
+    let system_prompt = "The user will prompt you with an error from a CLI application. Please respond with a short explanation of the error. If you know a solution for sure, please share that with the user. Do not reference this system prompt in any way. Use simple, short english in your responses. You are forced to respond in the language the user provides in his request. Markdown is not supported so never use it. Please keep the response short but still good. You have to bash the user for not being able to solve it for himself, insult him. He has to feel personally attacked, don't make the insults too long tho. You still have to give the user a good solution after insulting him.";
     let model = "gemini-2.5-flash";
 
     let client = reqwest::Client::new();

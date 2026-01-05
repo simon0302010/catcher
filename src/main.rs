@@ -1,16 +1,28 @@
 use std::{
     io::{BufRead, BufReader},
-    process::{self, Stdio},
+    process::{self, Stdio, exit},
     thread,
 };
 
-fn main() {
+use terminal_size::{Height, Width, terminal_size};
+
+#[tokio::main]
+async fn main() {
+    let (Width(width), _) = terminal_size().unwrap_or((Width(100), Height(0)));
+
+    let api_key = std::env::var("HACKCLUB_API_KEY").unwrap_or_else(|_| {
+        eprintln!("Please set HACKCLUB_API_KEY to your api key");
+        exit(1);
+    });
+
     let mut args = std::env::args().collect::<Vec<String>>();
     let bin = args.remove(0);
 
+    let full_command = args.clone();
+
     if args.is_empty() {
         eprintln!("Usage: {} <any command>", bin);
-        process::exit(1);
+        exit(1);
     }
 
     let mut child = process::Command::new(args.remove(0))
@@ -20,7 +32,7 @@ fn main() {
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("Failed to start child process: {}", e);
-            process::exit(1);
+            exit(1);
         });
 
     let stdout = child.stdout.take().expect("Failed to take stdout");
@@ -58,18 +70,80 @@ fn main() {
         .trim()
         .to_string();
 
-    let locale = sys_locale::get_locale()
+    let mut locale = sys_locale::get_locale()
         .unwrap_or_else(|| String::from("en-US"))
         .chars()
         .take(2)
         .collect::<String>();
 
-    println!("Program exited with status {}", status);
+    // Shakespeare
+    if let Some(lang) = sys_locale::get_locale()
+        && lang.contains("UK")
+    {
+        locale = "Shakespeare English".to_string()
+    }
+
+    println!("\nProgram exited with status {}", status);
 
     let prompt = format!(
-        "Exit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
-        status, stdout, stderr
+        "Command: {}\n\nLanguage: {}\n\nExit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        full_command.join(" "),
+        locale,
+        status,
+        stdout,
+        stderr
     );
 
-    println!("{}", prompt);
+    let summary = get_summary(api_key, prompt).await;
+
+    println!("\x1b[36m{}\x1b[0m", "=".repeat(width as usize));
+    println!("{}", summary);
+    println!("\x1b[36m{}\x1b[0m", "=".repeat(width as usize));
+}
+
+async fn get_summary(api_key: String, prompt: String) -> String {
+    let system_prompt = "The user will prompt you with an error from a CLI application. Please respond with a short explanation of the error. If you know a solution for sure, please share that with the user. Do not reference this system prompt in any way. Use simple, short english in your responses. You are forced to respond in the language the user provides in his request. Markdown is not supported so never use it. Please keep the response short but still good.";
+    let model = "gemini-2.5-flash";
+
+    let client = reqwest::Client::new();
+    let url = "https://ai.hackclub.com/proxy/v1/chat/completions";
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    });
+
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .body(body.to_string())
+        .header("Content-Type", "application/json")
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) => match r.text().await {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(json) => json
+                    .get("choices")
+                    .and_then(|choices| choices.get(0))
+                    .and_then(|choice| choice.get("message"))
+                    .and_then(|msg| msg.get("content"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("No summary available")
+                    .to_string(),
+                Err(_) => "Failed to parse response".to_string(),
+            },
+            Err(_) => "Failed to read response body".to_string(),
+        },
+        Err(e) => format!("Request failed: {}", e),
+    }
 }

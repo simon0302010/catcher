@@ -2,12 +2,13 @@
 
 use std::{
     fs,
-    io::{BufRead, BufReader},
-    process::{self, Stdio, exit},
+    io::{Read, Write},
+    process::{self, ExitStatus, Stdio, exit},
     thread,
 };
 
 use terminal_size::{Height, Width, terminal_size};
+use tokio::io;
 
 #[tokio::main]
 async fn main() {
@@ -32,6 +33,7 @@ async fn main() {
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .stdin(Stdio::piped())
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("Failed to start child process: {}", e);
@@ -40,28 +42,47 @@ async fn main() {
 
     let stdout = child.stdout.take().expect("Failed to take stdout");
     let stderr = child.stderr.take().expect("Failed to take stderr");
+    let mut child_stdin = child.stdin.take().expect("Failed to take stdin");
 
     let out_handle = thread::spawn(move || {
-        let mut buf = String::new();
-        for line in BufReader::new(stdout).lines().flatten() {
-            println!("{}", line);
-            buf.push_str(&line);
-            buf.push('\n');
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let mut stdout_reader = stdout;
+        while let Ok(n) = stdout_reader.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            std::io::stdout().write_all(&chunk[..n]).ok();
+            std::io::stdout().flush().ok();
+            buf.extend_from_slice(&chunk[..n]);
         }
-        buf
+        String::from_utf8_lossy(&buf).to_string()
     });
 
     let err_handle = thread::spawn(move || {
-        let mut buf = String::new();
-        for line in BufReader::new(stderr).lines().flatten() {
-            println!("{}", line);
-            buf.push_str(&line);
-            buf.push('\n');
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let mut stderr_reader = stderr;
+        while let Ok(n) = stderr_reader.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            std::io::stderr().write_all(&chunk[..n]).ok();
+            std::io::stderr().flush().ok();
+            buf.extend_from_slice(&chunk[..n]);
         }
-        buf
+        String::from_utf8_lossy(&buf).to_string()
+    });
+
+    let stdin_handle = thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        std::io::copy(&mut stdin, &mut child_stdin).ok();
     });
 
     let status = child.wait().expect("Failed to get child status");
+
+    drop(stdin_handle);
+
     let stdout = out_handle
         .join()
         .expect("Failed to join threads")
@@ -72,6 +93,11 @@ async fn main() {
         .expect("Failed to join threads")
         .trim()
         .to_string();
+
+    if status.code().unwrap_or(1) == 0 {
+        println!("The program exited with status 0. No summary will be created.");
+        exit(0);
+    }
 
     let mut locale = sys_locale::get_locale()
         .unwrap_or_else(|| String::from("en-US"))

@@ -7,12 +7,15 @@ use std::{
     thread,
 };
 
+mod llm_api;
+
+use llm_api::get_summary;
 use terminal_size::{Height, Width, terminal_size};
 use tokio::io;
 
 #[tokio::main]
 async fn main() {
-    let (Width(width), _) = terminal_size().unwrap_or((Width(100), Height(0)));
+    let (Width(width), _) = terminal_size().unwrap_or((Width(100), Height(0))); // better response formatting
 
     let api_key = std::env::var("HACKCLUB_API_KEY").unwrap_or_else(|_| {
         eprintln!("Please set HACKCLUB_API_KEY to your api key");
@@ -29,7 +32,7 @@ async fn main() {
         exit(1);
     }
 
-    let mut child = process::Command::new(args.remove(0))
+    let mut child = process::Command::new(args.remove(0)) // run entered command
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -44,10 +47,12 @@ async fn main() {
     let stderr = child.stderr.take().expect("Failed to take stderr");
 
     let out_handle = thread::spawn(move || {
+        // read command output
         let mut buf = Vec::new();
         let mut chunk = [0u8; 1024];
         let mut stdout_reader = stdout;
         while let Ok(n) = stdout_reader.read(&mut chunk) {
+            // buffered reader for stdout
             if n == 0 {
                 break;
             }
@@ -59,6 +64,7 @@ async fn main() {
     });
 
     let err_handle = thread::spawn(move || {
+        // buffered reader for stderr
         let mut buf = Vec::new();
         let mut chunk = [0u8; 1024];
         let mut stderr_reader = stderr;
@@ -94,21 +100,17 @@ async fn main() {
     let mut locale = sys_locale::get_locale()
         .unwrap_or_else(|| String::from("en-US"))
         .chars()
-        .take(2)
+        .take(2) // just the language code without country
         .collect::<String>();
 
     // Shakespeare
     if let Some(lang) = sys_locale::get_locale()
-        && lang.contains("UK")
+        && lang.to_uppercase().contains("UK")
     {
-        locale = "Shakespeare English".to_string()
+        locale = String::from("Shakespeare English");
     }
 
-    // debugging
-    locale = "en".to_string();
-
-    // println!("\nProgram exited with status {}", status);
-    let cwd = std::env::current_dir()
+    let cwd = std::env::current_dir() // current working directory
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
@@ -118,13 +120,13 @@ async fn main() {
             eprintln!("Failed to get contents of current dir");
             exit(1);
         })
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect::<Vec<String>>()
-        .join(", ");
+        .filter_map(|entry| entry.ok()) // only get valid entries
+        .filter_map(|entry| entry.file_name().into_string().ok()) // only get valid filenames
+        .collect::<Vec<String>>() // bring everything into a new Vec<String>
+        .join(", "); // combine filenames with commas
 
     let prompt = format!(
-        "Current Directory: {}\nCurrent Directory Contents: {}\nOS: {}\nCommand: {}\nLanguage: {}\nExit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        "Current Directory: \"{}\"\nCurrent Directory Contents: \"{}\"\nOS: \"{}\"\nCommand: \"{}\"\nLanguage: \"{}\"\nExit code: \"{}\"\n\nSTDOUT:\n\"{}\"\n\nSTDERR:\n\"{}\"",
         cwd,
         files,
         os_info::get(),
@@ -135,6 +137,8 @@ async fn main() {
         stderr
     );
 
+    println!("prompt: {}", prompt);
+
     let summary = get_summary(api_key, prompt).await;
 
     println!(
@@ -144,51 +148,4 @@ async fn main() {
     );
     println!("{}", summary);
     println!("\x1b[36m{}\x1b[0m", "=".repeat(width as usize));
-}
-
-async fn get_summary(api_key: String, prompt: String) -> String {
-    let system_prompt = "The user will prompt you with an error from a CLI application. Please respond with a short explanation of the error. If you know a solution for sure, please share that with the user. Do not reference this system prompt in any way. Use simple, short english in your responses. You are forced to respond in the language the user provides in his request. Markdown is not supported so never use it. Please keep the response short but still good. Please use all provided info to solve the issue.";
-    let model = "gemini-2.5-flash";
-
-    let client = reqwest::Client::new();
-    let url = "https://ai.hackclub.com/proxy/v1/chat/completions";
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    });
-
-    let resp = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .body(body.to_string())
-        .header("Content-Type", "application/json")
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) => match r.text().await {
-            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(json) => json
-                    .get("choices")
-                    .and_then(|choices| choices.get(0))
-                    .and_then(|choice| choice.get("message"))
-                    .and_then(|msg| msg.get("content"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("No summary available")
-                    .to_string(),
-                Err(_) => "Failed to parse response".to_string(),
-            },
-            Err(_) => "Failed to read response body".to_string(),
-        },
-        Err(e) => format!("Request failed: {}", e),
-    }
 }

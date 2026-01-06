@@ -33,7 +33,7 @@ async fn main() {
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::piped())
+        .stdin(Stdio::inherit())
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("Failed to start child process: {}", e);
@@ -42,7 +42,6 @@ async fn main() {
 
     let stdout = child.stdout.take().expect("Failed to take stdout");
     let stderr = child.stderr.take().expect("Failed to take stderr");
-    let mut child_stdin = child.stdin.take().expect("Failed to take stdin");
 
     let out_handle = thread::spawn(move || {
         let mut buf = Vec::new();
@@ -74,14 +73,7 @@ async fn main() {
         String::from_utf8_lossy(&buf).to_string()
     });
 
-    let stdin_handle = thread::spawn(move || {
-        let mut stdin = std::io::stdin();
-        std::io::copy(&mut stdin, &mut child_stdin).ok();
-    });
-
     let status = child.wait().expect("Failed to get child status");
-
-    drop(stdin_handle);
 
     let stdout = out_handle
         .join()

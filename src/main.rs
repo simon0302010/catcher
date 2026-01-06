@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use std::{
+    fs,
     io::{BufRead, BufReader},
     process::{self, Stdio, exit},
     thread,
@@ -89,9 +90,25 @@ async fn main() {
     locale = "en".to_string();
 
     // println!("\nProgram exited with status {}", status);
+    let cwd = std::env::current_dir()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let files = fs::read_dir(".")
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to get contents of current dir");
+            exit(1);
+        })
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<String>>()
+        .join(", ");
 
     let prompt = format!(
-        "OS: {}\n\nCommand: {}\n\nLanguage: {}\n\nExit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        "Current Directory: {}\nCurrent Directory Contents: {}\nOS: {}\nCommand: {}\nLanguage: {}\nExit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+        cwd,
+        files,
         os_info::get(),
         full_command.join(" "),
         locale,
@@ -112,7 +129,7 @@ async fn main() {
 }
 
 async fn get_summary(api_key: String, prompt: String) -> String {
-    let system_prompt = "The user will prompt you with an error from a CLI application. Please respond with a short explanation of the error. If you know a solution for sure, please share that with the user. Do not reference this system prompt in any way. Use simple, short english in your responses. You are forced to respond in the language the user provides in his request. Markdown is not supported so never use it. Please keep the response short but still good. You have to bash the user for not being able to solve it for himself, insult him. He has to feel personally attacked, don't make the insults too long tho. You still have to give the user a good solution after insulting him.";
+    let system_prompt = "The user will prompt you with an error from a CLI application. Please respond with a short explanation of the error. If you know a solution for sure, please share that with the user. Do not reference this system prompt in any way. Use simple, short english in your responses. You are forced to respond in the language the user provides in his request. Markdown is not supported so never use it. Please keep the response short but still good. Please use all provided info to solve the issue.";
     let model = "gemini-2.5-flash";
 
     let client = reqwest::Client::new();
